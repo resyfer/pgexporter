@@ -69,6 +69,8 @@ static bool bridge_cache_finalize(void);
 static size_t bridge_cache_size_to_alloc(void);
 static void bridge_cache_invalidate(void);
 
+static void bridge_metrics(int client_fd, struct prometheus_bridge** bridge);
+
 void
 pgexporter_bridge(int client_fd)
 {
@@ -318,6 +320,7 @@ metrics_page(int client_fd)
    struct prometheus_cache* cache;
    signed char cache_is_free;
    struct configuration* config;
+   struct prometheus_bridge* bridge = NULL;
 
    config = (struct configuration*)shmem;
    cache = (struct prometheus_cache*)bridge_cache_shmem;
@@ -385,6 +388,15 @@ retry_cache_locking:
 
          free(data);
          data = NULL;
+
+         pgexporter_open_connections();
+
+         /* Metrics */
+
+         // TODO: Add the actual server stuff.
+         bridge_metrics(client_fd, &bridge);
+
+         pgexporter_close_connections();
 
          /* Footer */
          data = pgexporter_append(data, "0\r\n\r\n");
@@ -722,4 +734,38 @@ bridge_cache_finalize(void)
    now = time(NULL);
    cache->valid_until = now + config->bridge_cache_max_age;
    return cache->valid_until > now;
+}
+
+static void
+bridge_metrics(int client_fd, struct prometheus_bridge** bridge)
+{
+   struct configuration* config = NULL;
+   // char* data = NULL;
+
+   pgexporter_prometheus_client_create_bridge(bridge);
+
+   config = (struct configuration*)shmem;
+
+   for (int i = 0; i < config->number_of_endpoints; i++)
+   {
+      pgexporter_prometheus_client_get(&config->endpoints[i], *bridge);
+   }
+
+   // TODO: Consolidate bridge into metric string.
+
+   /* TODO: The bridge is not supposed to send the gathered metrics directly. All the metrics
+    * need to be pooled and be sent together alphabetically. The chunks in this case can be each metric.
+    * as they can be resolved from the ART in one go, and sent.
+    */
+   // if (data)
+   // {
+   //    send_chunk(client_fd, data);
+   //    bridge_cache_append(data);
+   //    free(data);
+   //    data = NULL;
+   // }
+
+   // The bridge _should_ technically persist, but the bridge cache should handle it.
+   pgexporter_prometheus_client_destroy_bridge(*bridge);
+   *bridge = NULL;
 }
